@@ -9,7 +9,7 @@ cookies = {
     'SERVERID': '224',
 }
 
-url = 'https://jwmis.hhtc.edu.cn/jsxsd/xsxkkc/ggxxkxkOper?kcid=B99489C9F3934F9DACA0703A59AF893F&cfbs=null&jx0404id=202520262005777&xkzy=&trjf='
+url = 'https://********/jsxsd/xsxkkc/********er?kcid=B99489C9F3934F9DAC**********&jx0404id=202520262005777&xkzy=&trjf='
 # 设置最大尝试次数
 max_attempts = 10
 
