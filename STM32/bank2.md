@@ -82,6 +82,19 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     }
 }
 ```
+```c
+/**
+  * @brief  按键中断回调（需在 CubeMX 中配置 EXTI 下降沿触发）
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+    if (GPIO_Pin == KEY_UP_Pin) {          // KEY_UP_Pin 需与 CubeMX 中标签一致
+        HAL_Delay(20);                     // 简单消抖
+        if (HAL_GPIO_ReadPin(KEY_UP_GPIO_Port, KEY_UP_Pin) == GPIO_PIN_RESET) {
+            key_flag = 1;
+        }
+    }
+}
+```
 #### 生成波形数据并绘制
 ```c
 
@@ -137,5 +150,29 @@ void draw_triangle_waveform(void) {
 ```
 #### 用OLED屏幕显示
 ```c
+/**
+  * @brief  OLED 绘制波形（利用库的画线函数）
+  * @param  wave_data  波形 Y 坐标数组（长度 POINTS，值 0~63）
+  * @param  title      波形名称字符串（如 "Sine"）
+  */
+void OLED_Draw_Waveform(uint8_t *wave_data, char *title) {
+    OLED_Clear();                        // 清空显存（不清除屏幕，只是清数组）
 
+    // 显示你的姓名（可替换）
+    OLED_ShowString(0, 0, "Your Name", OLED_6X8);
+
+    // 显示波形名称（在右上角）
+    OLED_ShowString(100, 0, title, OLED_6X8);
+
+    // 画坐标轴（可选）
+    OLED_DrawLine(0, 32, 127, 32);       // X轴（水平线）
+    OLED_DrawLine(64, 0, 64, 63);        // Y轴（垂直线）
+
+    // 画波形：依次连接相邻点
+    for (int i = 0; i < POINTS - 1; i++) {
+        OLED_DrawLine(i, wave_data[i], i+1, wave_data[i+1]);
+    }
+
+    OLED_Update();                       // 将显存数据发送到屏幕
+}
 ```
