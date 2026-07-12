@@ -1,5 +1,3 @@
-hadc1.Instance->CR2 |= ADC_CR2_CONT;//强制开启ADC。
-```c
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
@@ -8,7 +6,6 @@ hadc1.Instance->CR2 |= ADC_CR2_CONT;//强制开启ADC。
   ******************************************************************************
   */
 /* USER CODE END Header */
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "adc.h"
@@ -20,6 +17,7 @@ hadc1.Instance->CR2 |= ADC_CR2_CONT;//强制开启ADC。
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "arm_math.h"
+#include "OLED.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -40,17 +38,24 @@ typedef enum {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define PI           3.1415926f
-#define FFT_SIZE     256
-#define SAMPLE_RATE  1280    // Hz, adjust to your timer frequency
+#define FFT_SIZE     2048
+#define SAMPLE_RATE  20000    // Hz, adjust to your timer frequency
 
 uint16_t ADC_Value[FFT_SIZE];
 float fft_input[FFT_SIZE];
 float fft_output[FFT_SIZE * 2];
 float magnitude[FFT_SIZE / 2];
 float hanning_window[FFT_SIZE];
+float time_data[FFT_SIZE];
 /* USER CODE END PD */
 
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
 /* Private variables ---------------------------------------------------------*/
+
 /* USER CODE BEGIN PV */
 arm_rfft_fast_instance_f32 fft_instance;
 volatile uint8_t dma_flag = 0;
@@ -78,18 +83,43 @@ void Init_Window(void) {
 // ------------------------------------------------------------------
 // 2. Preprocess: remove DC offset + apply window
 // ------------------------------------------------------------------
-void Process_FFT_Data(uint16_t *src) {
+void Process_FFT_Data(uint16_t *src)
+{
     uint32_t sum = 0;
-    for (int i = 0; i < FFT_SIZE; i++) {
+
+
+    // 求平均值，去DC
+    for(int i=0;i<FFT_SIZE;i++)
+    {
         sum += src[i];
     }
+
+
     float mean = (float)sum / FFT_SIZE;
 
-    for (int i = 0; i < FFT_SIZE; i++) {
-        fft_input[i] = ((float)src[i] - mean) * hanning_window[i];
+
+
+    for(int i=0;i<FFT_SIZE;i++)
+    {
+
+        // ADC去直流
+        float adc_value = (float)src[i] - mean;
+
+
+        //========================
+        // 时域数据(V)
+        //========================
+        time_data[i] =adc_value * 3.3f / 4096.0f;
+
+
+
+        //========================
+        // FFT输入
+        //========================
+        fft_input[i] =adc_value * hanning_window[i];
+
     }
 }
-
 // ------------------------------------------------------------------
 // 3. Find fundamental frequency (peak index)
 // ------------------------------------------------------------------
@@ -104,7 +134,9 @@ int Find_Fundamental(float *mag, int len) {
     }
     return peak_index;
 }
-
+float Get_Freq(int i) {
+    return (float)i * SAMPLE_RATE / FFT_SIZE;
+}
 // ------------------------------------------------------------------
 // 4. Classify waveform based on harmonic ratios
 // ------------------------------------------------------------------
@@ -115,24 +147,95 @@ WaveType Classify_Waveform(float *mag, int len, int peak_idx) {
     if (fundamental < 1.0f) return WAVE_UNKNOWN;
 
     // Check FM: two sidebands close to carrier
-    if (peak_idx > 2 && peak_idx < len - 3) {
-        float left  = mag[peak_idx - 2];
-        float right = mag[peak_idx + 2];
-        if (left > fundamental * 0.1f && right > fundamental * 0.1f) {
+// 改进后的FM检测
+int peak_count=0;
+int peaks[20];  // 存储峰位置
+int peak_idx_arr = 0;
+
+// 统计边带并存储位置
+for(int i=peak_idx-20; i<peak_idx+20; i++) {
+    if(i >= 0 && i < len && mag[i] > fundamental*0.1) {
+        peaks[peak_idx_arr++] = i;
+        peak_count++;
+    }
+}
+
+if (peak_count > 5) {
+    // 检查峰间距
+    float avg_distance = 0;
+    int distance_count = 0;
+    
+    for(int i=1; i<peak_idx_arr; i++) {
+        float distance = (float)(peaks[i] - peaks[i-1]);
+        avg_distance += distance;
+        distance_count++;
+    }
+    
+    if(distance_count > 0) {
+        avg_distance /= distance_count;
+        
+        // 检查80%的间距是否在20%容差内
+        int valid_distances = 0;
+        for(int i=1; i<peak_idx_arr; i++) {
+            float distance = (float)(peaks[i] - peaks[i-1]);
+            if(fabs(distance - avg_distance) / avg_distance < 0.2f) {
+                valid_distances++;
+            }
+        }
+        
+        if(valid_distances >= distance_count * 0.8f) {
             return WAVE_FM;
         }
     }
+}
 
     // Check AM: multiple sidebands
-    int side_count = 0;
-    for (int i = peak_idx - 5; i <= peak_idx + 5; i++) {
-        if (i > 0 && i < len && i != peak_idx && mag[i] > fundamental * 0.15f) {
-            side_count++;
+// 改进后的AM检测
+int left=0,right=0;
+float left_freqs[3], right_freqs[3];
+int left_count=0, right_count=0;
+
+for(int i=1; i<FFT_SIZE/2; i++) {
+    if(peak_idx-i >= 0 && mag[peak_idx-i] > mag[peak_idx]*0.05) {
+        left++;
+        if(left_count < 3) {
+            left_freqs[left_count] = Get_Freq(peak_idx-i);
+            left_count++;
         }
     }
-    if (side_count > 3) {
+    if(peak_idx+i < len && mag[peak_idx+i] > mag[peak_idx]*0.05) {
+        right++;
+        if(right_count < 3) {
+            right_freqs[right_count] = Get_Freq(peak_idx+i);
+            right_count++;
+        }
+    }
+}
+
+if(left == right && left <= 3) {
+    // 检查边带间距
+    float avg_left_distance = 0, avg_right_distance = 0;
+    int left_dist_count = 0, right_dist_count = 0;
+    
+    for(int i=1; i<left_count; i++) {
+        float distance = left_freqs[i] - left_freqs[i-1];
+        avg_left_distance += distance;
+        left_dist_count++;
+    }
+    if(left_dist_count > 0) avg_left_distance /= left_dist_count;
+    
+    for(int i=1; i<right_count; i++) {
+        float distance = right_freqs[i] - right_freqs[i-1];
+        avg_right_distance += distance;
+        right_dist_count++;
+    }
+    if(right_dist_count > 0) avg_right_distance /= right_dist_count;
+    
+    // 检查左右间距是否大致相等
+    if(fabs(avg_left_distance - avg_right_distance) / avg_left_distance < 0.2f) {
         return WAVE_AM;
     }
+}
 
     // Check 3rd harmonic ratio to distinguish Sine / Square / Triangle
     int idx_3rd = peak_idx * 3;
@@ -149,48 +252,158 @@ WaveType Classify_Waveform(float *mag, int len, int peak_idx) {
     return WAVE_UNKNOWN;
 }
 
+void vofa(int len)
+{
+		//float voltage = time_data[i] * 3.3f / 4096.0f;
+	for(int i=0;i<len;i++)
+	printf("%f,%f,%f\r\n",Get_Freq(i),magnitude[i],time_data[i]);
+}
+void OLED_DrawFFTWave(float *mag,int len)
+{
+    float max=0;
+
+    for(int i=1;i<len;i++)
+    {
+        if(mag[i]>max)
+            max=mag[i];
+    }
+
+    if(max<0.001f)
+        max=1;
+
+    for(int x=0;x<128;x++)
+    {
+
+        int index=x*len/128;
+
+        int height=(int)(mag[index]/max*18);
+
+
+        if(height>18)
+            height=18;
+
+        OLED_DrawLine(x,63,x,63-height);
+
+    }
+
+}
+void OLED_DrawTimeWave(float *data,int len)
+{
+
+    float max=0;
+
+
+    for(int i=0;i<len;i++)
+    {
+        if(fabs(data[i])>max)
+            max=fabs(data[i]);
+    }
+
+    if(max<0.001f)
+        max=1;
+
+
+    int last_x=0;
+    int last_y=28;
+
+
+    for(int x=0;x<128;x++)
+    {
+
+        int index=x*len/128;
+
+
+        float value=data[index];
+
+        int y=28-(int)(value/max*10);
+
+
+        if(y<18)
+            y=18;
+
+        if(y>36)
+            y=36;
+
+
+
+        if(x>0)
+        {
+            OLED_DrawLine(last_x,last_y,x,y);
+        }
+
+
+        last_x=x;
+        last_y=y;
+
+    }
+
+}
+void OLED_ShowTimeFFT(float *time,int time_len,float *fft,int fft_len)
+{
+
+OLED_ClearBuffer();
+
+OLED_ShowString(0,0,"TIME");
+
+
+OLED_DrawTimeWave(time,time_len);
+
+
+OLED_ShowString(0,38,"FFT");
+
+
+OLED_DrawFFTWave(fft,fft_len);
+
+OLED_Refresh();
+
+}
 /* USER CODE END 0 */
 
-// ------------------------------------------------------------------
-// MAIN ENTRY
-// ------------------------------------------------------------------
-int main(void) {
-    /* USER CODE BEGIN 1 */
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
 
-    /* USER CODE END 1 */
+  /* USER CODE BEGIN 1 */
 
-    HAL_Init();
+  /* USER CODE END 1 */
 
-    /* USER CODE BEGIN Init */
+  /* MCU Configuration--------------------------------------------------------*/
 
-    /* USER CODE END Init */
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
-    SystemClock_Config();
+  /* USER CODE BEGIN Init */
 
-    /* USER CODE BEGIN SysInit */
+  /* USER CODE END Init */
 
-    /* USER CODE END SysInit */
+  /* Configure the system clock */
+  SystemClock_Config();
 
-    MX_GPIO_Init();
-    MX_DMA_Init();
-    MX_I2C1_Init();
-    MX_ADC1_Init();
-    MX_USART2_UART_Init();
+  /* USER CODE BEGIN SysInit */
 
-    /* USER CODE BEGIN 2 */
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_I2C1_Init();
+  MX_ADC1_Init();
+  MX_USART2_UART_Init();
+	
+	OLED_Init();
+OLED_ClearBuffer();
+
+OLED_ShowString(0,0,"FFT ");
+
+OLED_Refresh();
+  /* USER CODE BEGIN 2 */
     Init_Window();
 arm_rfft_fast_init_f32(&fft_instance, FFT_SIZE);
-
-// --------------------------------------------------------------
-// 1. 开启 ADC 连续转换模式（强制！解决中断不触发的核心）
-// --------------------------------------------------------------
-// 如果 CubeMX 没配置连续模式，这里强行打开
-hadc1.Instance->CR2 |= ADC_CR2_CONT;  // CONT = 1，连续转换
 printf("Continuous Conversion Enabled.\r\n");
 
-// --------------------------------------------------------------
-// 2. 启动 ADC DMA
-// --------------------------------------------------------------
 if (HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_Value, FFT_SIZE) != HAL_OK) {
     printf("ADC DMA Start Failed!\r\n");
     while(1);
@@ -198,90 +411,102 @@ if (HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_Value, FFT_SIZE) != HAL_OK) {
     printf("ADC DMA Started.\r\n");
 }
 
-// --------------------------------------------------------------
-// 3. 启动 ADC 转换（软件触发）
-// --------------------------------------------------------------
-// 在连续模式下，调用一次 Start，ADC 就会一直转下去
 HAL_ADC_Start(&hadc1);
 printf("ADC Continuous Conversion Running.\r\n");
 
-// 使能 DMA 中断（冗余保护）
 HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
 
 printf("System Ready.\r\n");
-    /* USER CODE END 2 */
+//for(int i=0;i<FFT_SIZE/2;i++)
+//{
+//	printf("%f,%f\r\n",Get_Freq(i),magnitude[i]);
+//}
+  /* USER CODE END 2 */
 
-    /* Infinite loop */
-    while (1) {
-        if (dma_flag == 1) {
-            dma_flag = 0;
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+		
+		if (dma_flag) {
+        dma_flag = 0;   // 清除标志
 
-            // Stop DMA to avoid overwriting data during processing
-            HAL_ADC_Stop_DMA(&hadc1);
+        // ① 预处理：去直流 + 加窗
+        Process_FFT_Data(ADC_Value);
 
-            // 1. Preprocess
-            Process_FFT_Data(ADC_Value);
+        // ② 执行实数 FFT
+        arm_rfft_fast_f32(&fft_instance, fft_input, fft_output, 0);
 
-            // 2. FFT
-            arm_rfft_fast_f32(&fft_instance, fft_input, fft_output, 0);
+        // ③ 计算幅度谱（仅前 N/2 个点）
+        arm_cmplx_mag_f32(fft_output, magnitude, FFT_SIZE / 2);
+				for(int i=0;i<FFT_SIZE/2;i++)
+					{
+    magnitude[i] = magnitude[i] * 4.0f / FFT_SIZE;
+					}
+        // ④ 查找基频峰值
+        int peak = Find_Fundamental(magnitude, FFT_SIZE / 2);
 
-            // 3. Compute magnitude (skip DC, take first half)
-            for (int i = 1; i < FFT_SIZE / 2; i++) {
-                float real = fft_output[2 * i];
-                float imag = fft_output[2 * i + 1];
-                magnitude[i - 1] = sqrtf(real * real + imag * imag);
-            }
+        // ⑤ 分类波形
+        WaveType type = Classify_Waveform(magnitude, FFT_SIZE / 2, peak);
 
-            // 4. Find fundamental and classify
-            int peak = Find_Fundamental(magnitude, FFT_SIZE / 2);
-            WaveType type = Classify_Waveform(magnitude, FFT_SIZE / 2, peak);
+        // ⑥ 输出结果
+			 const char *wave_name[] = {"Unknown", "Sine", "Square", "Triangle", "AM", "FM"};
+			 printf("%-8s",wave_name[type]);
+			vofa(FFT_SIZE/2);
+			 // OLED显示
+OLED_ShowTimeFFT(time_data,FFT_SIZE,magnitude,FFT_SIZE/2);
+		}
 
-            // 5. Output result
-            const char *wave_name[] = {"Unknown", "Sine", "Square", "Triangle", "AM", "FM"};
-            printf("Wave: %-8s  PeakIdx:%2d  Mag:%.1f\r\n",
-                   wave_name[type], peak, magnitude[peak]);
+    /* USER CODE END WHILE */
 
-            // 6. Restart DMA for next frame
-            HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_Value, FFT_SIZE);
-        }
-
-        /* USER CODE BEGIN 3 */
+    /* USER CODE BEGIN 3 */
     }
-    /* USER CODE END 3 */
+  /* USER CODE END 3 */
 }
 
-// ------------------------------------------------------------------
-// System Clock Configuration (generated by CubeMX, kept as is)
-// ------------------------------------------------------------------
-void SystemClock_Config(void) {
-    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
-    __HAL_RCC_PWR_CLK_ENABLE();
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
 
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-    RCC_OscInitStruct.PLL.PLLM = 4;
-    RCC_OscInitStruct.PLL.PLLN = 168;
-    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-    RCC_OscInitStruct.PLL.PLLQ = 4;
-    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
-        Error_Handler();
-    }
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = 4;
+  RCC_OscInitStruct.PLL.PLLN = 168;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
-                                | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
 
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK) {
-        Error_Handler();
-    }
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  {
+    Error_Handler();
+  }
 }
 
 /* USER CODE BEGIN 4 */
@@ -309,20 +534,31 @@ int fputc(int ch, FILE *f) {
 
 /* USER CODE END 4 */
 
-// ------------------------------------------------------------------
-// Error Handler
-// ------------------------------------------------------------------
-void Error_Handler(void) {
-    __disable_irq();
-    while (1) {
-    }
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
 }
-
 #ifdef USE_FULL_ASSERT
-void assert_failed(uint8_t *file, uint32_t line) {
-    /* USER CODE BEGIN 6 */
-    /* USER CODE END 6 */
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-```
