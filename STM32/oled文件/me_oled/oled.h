@@ -25,7 +25,7 @@ void OLED_ShowChar(uint8_t x, uint8_t y, uint8_t chr);
 void OLED_ShowString(uint8_t x, uint8_t y, char* str);
 void OLED_ShowNum(uint8_t x, uint8_t y, uint32_t num, uint8_t len);
 void OLED_DrawBMP(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, const uint8_t BMP[]);
-
+void OLED_DrawString(uint8_t x,uint8_t y,char *str);//缓存显示
 // 新增的绘图函数（使用显存缓冲区）
 void OLED_Refresh(void);                           // 刷新显存到屏幕
 void OLED_DrawPoint(uint8_t x, uint8_t y);         // 画点

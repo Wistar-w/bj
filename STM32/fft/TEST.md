@@ -1,3 +1,4 @@
+```c
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
@@ -42,6 +43,7 @@ typedef enum {
 #define SAMPLE_RATE  20000    // Hz, adjust to your timer frequency
 
 uint16_t ADC_Value[FFT_SIZE];
+uint16_t ADC_Buffer_Copy[FFT_SIZE];//缓存，cpu处理不过来
 float fft_input[FFT_SIZE];
 float fft_output[FFT_SIZE * 2];
 float magnitude[FFT_SIZE / 2];
@@ -109,14 +111,16 @@ void Process_FFT_Data(uint16_t *src)
         //========================
         // 时域数据(V)
         //========================
-        time_data[i] =adc_value * 3.3f / 4096.0f;
+        time_data[i] =
+        adc_value * 3.3f / 4096.0f;
 
 
 
         //========================
         // FFT输入
         //========================
-        fft_input[i] =adc_value * hanning_window[i];
+        fft_input[i] =
+        adc_value * hanning_window[i];
 
     }
 }
@@ -260,31 +264,29 @@ void vofa(int len)
 }
 void OLED_DrawFFTWave(float *mag,int len)
 {
-    float max=0;
 
-    for(int i=1;i<len;i++)
-    {
-        if(mag[i]>max)
-            max=mag[i];
-    }
-
-    if(max<0.001f)
-        max=1;
-
-    for(int x=0;x<128;x++)
-    {
-
-        int index=x*len/128;
-
-        int height=(int)(mag[index]/max*18);
+float max=0;
 
 
-        if(height>18)
-            height=18;
+for(int i=1;i<len;i++)
+{
+    if(mag[i]>max)
+        max=mag[i];
+}
 
-        OLED_DrawLine(x,63,x,63-height);
 
-    }
+for(int x=0;x<128;x++)
+{
+
+    int index=x*len/128;
+
+
+    int h=(mag[index]/max)*30;
+
+
+    OLED_DrawLine(x,63,x,63-h);
+
+}
 
 }
 void OLED_DrawTimeWave(float *data,int len)
@@ -299,12 +301,8 @@ void OLED_DrawTimeWave(float *data,int len)
             max=fabs(data[i]);
     }
 
-    if(max<0.001f)
-        max=1;
 
-
-    int last_x=0;
-    int last_y=28;
+    int last_y=32;
 
 
     for(int x=0;x<128;x++)
@@ -313,49 +311,43 @@ void OLED_DrawTimeWave(float *data,int len)
         int index=x*len/128;
 
 
-        float value=data[index];
-
-        int y=28-(int)(value/max*10);
+        int y=16-(data[index]/max)*25;
 
 
-        if(y<18)
-            y=18;
-
-        if(y>36)
-            y=36;
-
+        if(y<0)y=0;
+        if(y>63)y=63;
 
 
         if(x>0)
         {
-            OLED_DrawLine(last_x,last_y,x,y);
+            OLED_DrawLine(x-1,last_y,x,y);
         }
 
 
-        last_x=x;
         last_y=y;
-
     }
-
 }
-void OLED_ShowTimeFFT(float *time,int time_len,float *fft,int fft_len)
+void OLED_ShowTimeFFT(float *time,int time_len,float *fft,int fft_len,int type)
 {
 
 OLED_ClearBuffer();
 
-OLED_ShowString(0,0,"TIME");
+OLED_DrawString(0,0,"TIME");
 
-
+			 char * wave_name[] = {"Unknown", "Sine", "Square", "Triangle", "AM", "FM"};
+			 printf("%-8s",wave_name[type]); 
+			  OLED_DrawString(40,0,wave_name[type]);
+	
 OLED_DrawTimeWave(time,time_len);
 
 
-OLED_ShowString(0,38,"FFT");
+OLED_DrawString(0,4,"FFT");
 
 
-OLED_DrawFFTWave(fft,fft_len);
+//OLED_DrawFFTWave(fft,fft_len);
+OLED_DrawFFTWave(magnitude,FFT_SIZE/2);			 
 
 OLED_Refresh();
-
 }
 /* USER CODE END 0 */
 
@@ -396,7 +388,7 @@ int main(void)
 	OLED_Init();
 OLED_ClearBuffer();
 
-OLED_ShowString(0,0,"FFT ");
+//OLED_ShowString(0,0,"FFT ");
 
 OLED_Refresh();
   /* USER CODE BEGIN 2 */
@@ -430,9 +422,11 @@ printf("System Ready.\r\n");
 		
 		if (dma_flag) {
         dma_flag = 0;   // 清除标志
-
+			
+memcpy(ADC_Buffer_Copy,ADC_Value,sizeof(ADC_Value));//完整复制
+			
         // ① 预处理：去直流 + 加窗
-        Process_FFT_Data(ADC_Value);
+        Process_FFT_Data(ADC_Buffer_Copy);
 
         // ② 执行实数 FFT
         arm_rfft_fast_f32(&fft_instance, fft_input, fft_output, 0);
@@ -450,11 +444,17 @@ printf("System Ready.\r\n");
         WaveType type = Classify_Waveform(magnitude, FFT_SIZE / 2, peak);
 
         // ⑥ 输出结果
-			 const char *wave_name[] = {"Unknown", "Sine", "Square", "Triangle", "AM", "FM"};
-			 printf("%-8s",wave_name[type]);
-			vofa(FFT_SIZE/2);
+			 char * wave_name[] = {"Unknown", "Sine", "Square", "Triangle", "AM", "FM"};
+			 printf("%-8s",wave_name[type]); 
+			  OLED_DrawString(40,0,wave_name[2]);
 			 // OLED显示
-OLED_ShowTimeFFT(time_data,FFT_SIZE,magnitude,FFT_SIZE/2);
+			 //OLED_DrawString(40,0,wave_name[type]);放外面会被后面覆盖
+			 OLED_ShowTimeFFT(time_data,FFT_SIZE,magnitude,FFT_SIZE/2,type);
+			 //OLED_Refresh();
+			 //vofa
+			vofa(FFT_SIZE/2);
+	
+			
 		}
 
     /* USER CODE END WHILE */
@@ -562,3 +562,4 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
+```

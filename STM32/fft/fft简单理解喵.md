@@ -78,7 +78,7 @@ if(ratio>0.05 &&
     return WAVE_TRIANGLE;
 }
 ```
-#### AM
+#### AM喵
 特点：有中心峰，两侧对称，只有少量边带喵
 //if(mag[carrier_bin-i] > mag[carrier_bin]*0.05)
 **里面的 0.05 不是 FFT 的公式，而是一个人为设定的阈值喵。

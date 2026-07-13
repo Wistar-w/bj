@@ -1,14 +1,14 @@
 #include "oled.h"
 #include "oledfont.h"
-#include <string.h>   // ÓÃÓÚ memset
+#include <string.h>   // ï¿½ï¿½ï¿½ï¿½ memset
 #include <stdlib.h>
 
 extern I2C_HandleTypeDef hi2c1;
 
-// ÏÔ´æ»º³åÇø: [Ò³][ÁĞ]
+// ï¿½Ô´æ»ºï¿½ï¿½ï¿½ï¿½: [Ò³][ï¿½ï¿½]
 static uint8_t oled_buffer[OLED_PAGES][OLED_WIDTH];
 
-// ---------- Ô­ÓĞº¯Êı£¨±£³Ö²»±ä£©----------
+// ---------- Ô­ï¿½Ğºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö²ï¿½ï¿½ä£©----------
 void OLED_WriteCmd(uint8_t cmd) {
     HAL_I2C_Mem_Write(&hi2c1, OLED_ADDR, OLED_CMD, I2C_MEMADD_SIZE_8BIT, &cmd, 1, 100);
 }
@@ -109,7 +109,7 @@ void OLED_DrawBMP(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, const uint8_t 
     }
 }
 
-// ---------- ĞÂÔöµÄ»æÍ¼º¯Êı£¨Ê¹ÓÃÏÔ´æ»º³åÇø£©----------
+// ---------- ï¿½ï¿½ï¿½ï¿½ï¿½Ä»ï¿½Í¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½ï¿½Ô´æ»ºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½----------
 void OLED_ClearBuffer(void) {
     memset(oled_buffer, 0, sizeof(oled_buffer));
 }
@@ -150,4 +150,35 @@ void OLED_DrawLine(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2) {
         if (e2 > -dy) { err -= dy; x += sx; }
         if (e2 < dx)  { err += dx; y += sy; }
     }
+}
+void OLED_DrawChar(uint8_t x,uint8_t y,uint8_t chr)
+{
+    uint8_t c=chr-' ';
+
+
+    for(uint8_t i=0;i<8;i++)
+    {
+        oled_buffer[y][x+i]=F8X16[c*16+i];
+    }
+
+
+    for(uint8_t i=0;i<8;i++)
+    {
+        oled_buffer[y+1][x+i]=F8X16[c*16+i+8];
+    }
+}
+void OLED_DrawString(uint8_t x,uint8_t y,char *str)
+{
+
+while(*str)
+{
+
+OLED_DrawChar(x,y,*str);
+
+x+=8;
+
+str++;
+
+}
+
 }
