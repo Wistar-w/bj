@@ -155,3 +155,8 @@ printf("%f,%f\r\n",Get_Freq(i),magnitude[i],time_data[i]);
 //float time_data[FFT_SIZE];
 // time_data[i] =adc_value * 3.3f / 4096.0f;
 ```
+##### 补喵
+```c
+DMA2_Stream0->CR |= DMA_SxCR_EN;//强制打开DMA喵
+/* USER CODE END 2 */
+```
